@@ -44,7 +44,8 @@ When the user mentions the screenshot or asks you to look at it, read this file.
 
 ## System Requirements
 
-- Windows (macOS should mostly work for the core features, but some parts like audio playback need Mac-specific adjustments. Since I don't currently have a Mac available, it hasn't been tested. Linux requires more changes than macOS, particularly around screen capture.)
+- Windows (GPU recommended. The Whisper voice input component can run on CPU only, but may be very slow depending on your hardware.)
+  macOS should mostly work for the core features, but some parts like audio playback need Mac-specific adjustments. Since I don't currently have a Mac available, it hasn't been tested. Linux requires more changes than macOS, particularly around screen capture.
 
 ## Installation
 
@@ -255,7 +256,8 @@ When the user shares this file, review its contents.
 
 ## 動作環境
 
-- Windows（MacOSはメイン部分は動くと思いますが、音声再生などいくつかMac向けに調整が必要です。わずかな手直しで済むと思いますが現在使えるマックを持っていないので、対応できていません。すみません。Linuxは画像キャプチャ部分などMacより手直しが必要なようです。）
+- Windows（GPU推奨。音声入力部分のWhisperはCPUのみでも動きますが、機種によっては非常に遅くなります。）
+  macOSはメイン部分は動くと思いますが、音声再生などいくつかMac向けに調整が必要です。わずかな手直しで済むと思いますが、現在使えるマックを持っていないため対応できていません。すみません。Linuxは画像キャプチャ部分などMacより手直しが必要なようです。
 
 
 ## インストール
