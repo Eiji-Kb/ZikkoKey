@@ -7,7 +7,7 @@ Voice input and voice-based editing are both supported. Edited text can be sent 
 🤔 Ugh, I pressed Enter again when I meant to press Shift+Enter. Still happens sometimes.  
 On mainframe editors, the "↵" key is purely a line break — you only send to the host by pressing the Execute key (Enter). I wanted that same feel, so I built this input pad.  
 Lately I've been using voice input quite a bit too, so I wired in Whisper as well.  
-(It's general-purpose, but since I mainly use Claude Code right now, it's tuned toward that.)
+(This app is general-purpose, but since I mainly use Claude Code right now, it's tuned toward that.)
 
 ![English](shot-e.png)
 
@@ -15,7 +15,7 @@ Lately I've been using voice input quite a bit too, so I wired in Whisper as wel
 
 ## Features
 
-- **Voice transcription** — Transcribes speech via OpenAI Whisper ※ Whisper must be installed separately
+- **Voice transcription** — Transcribes speech via OpenAI Whisper ※ Whisper setup is required. It is included in step 2: Python package installation (requirements.txt).
 - **Voice editing** — Edit text by voice (add a line break / proofread / make it a list / change X to Y / etc. — doesn't always work perfectly; use Ctrl+Z to undo)  
   Selectable voice-editing AI — keeping costs as low as possible  
   　Claude Code CLI / Uses the Claude CLI you're already running  
@@ -49,8 +49,8 @@ When the user mentions the screenshot or asks you to look at it, read this file.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/zikkokey.git
-cd zikkokey
+git clone https://github.com/Eiji-Kb/ZikkoKey.git
+cd ZikkoKey
 ```
 
 ### 2. Install Python packages
