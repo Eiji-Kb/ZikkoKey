@@ -42,7 +42,8 @@ When the user mentions the screenshot or asks you to look at it, read this file.
 
 ## System Requirements
 
-- Windows (macOS should mostly work for the core features, but some parts like audio playback need Mac-specific adjustments. Since I don't currently have a Mac available, it hasn't been tested. Linux requires more changes than macOS, particularly around screen capture.)
+- Windows (GPU recommended. The Whisper voice input component can run on CPU only, but may be very slow depending on your hardware.)
+  macOS should mostly work for the core features, but some parts like audio playback need Mac-specific adjustments. Since I don't currently have a Mac available, it hasn't been tested. Linux requires more changes than macOS, particularly around screen capture.
 
 ## Installation
 
