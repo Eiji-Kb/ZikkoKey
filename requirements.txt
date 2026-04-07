@@ -1,0 +1,12 @@
+openai-whisper
+torch
+numpy
+sounddevice
+pyperclip
+pyautogui
+pycaw
+comtypes
+Pillow
+
+# Gemini backend
+google-genai
