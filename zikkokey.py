@@ -1142,7 +1142,8 @@ class InputWindow:
         if _g.whisper_model is not None:
             return True
         self.root.after(0, lambda: self._start_status_anim(t("vstatus_loading_b")))
-        for device in ("cuda", "cpu"):
+        devices = ("cuda", "cpu") if torch.cuda.is_available() else ("cpu",)
+        for device in devices:
             try:
                 self.root.after(0, lambda d=device: self._start_status_anim(
                     t("vstatus_loading_db", d=d)))
