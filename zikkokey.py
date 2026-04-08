@@ -629,6 +629,7 @@ class _AppState:
         self.audio_vol          = None   # キャッシュ済み POINTER(IAudioEndpointVolume)
         self.audio_iface        = None   # interface を生存させる参照
         self.gpu_restoring      = False  # GPU復帰中フラグ（二重実行防止）
+        self.transcribe_lock    = threading.Lock()  # transcribe() 同時実行防止
 
 _g = _AppState()
 
@@ -1295,82 +1296,93 @@ class InputWindow:
         except Exception as e:
             self._log(t("log_voice_audio_err", e=e))
             return
+        if len(audio) < self.SAMPLE_RATE * 0.5:
+            self._log(f"[VOICE] 音声が短すぎるためスキップ ({len(audio)/self.SAMPLE_RATE:.2f}s)")
+            self.root.after(0, lambda: self.voice_status.set(t("vstatus_silent")))
+            return
         if not self._load_model():
             return
-        try:
-            fp16 = (_g.whisper_device == "cuda")
-            # テキストエリアの内容を文脈ヒントとして渡す（同音異義語の精度向上）
-            initial_prompt = getattr(self, "_initial_prompt_cache", None)
-            self._log(t("log_voice_transcribe", fp16=fp16,
-                         prompt=t("log_yes") if initial_prompt else t("log_no")))
-            wlang = self.settings.get("whisper_language", "ja")
-            common_args = dict(
-                language=None if wlang == "auto" else wlang,
-                initial_prompt=initial_prompt,
-            )
+        with _g.transcribe_lock:
             try:
-                result = _g.whisper_model.transcribe(audio, fp16=fp16, **common_args)
-                # fp16でNaNが発生した場合はfp32でリトライ
-                import math
-                segs = result.get("segments", [])
-                if fp16 and segs and any(
-                    math.isnan(s.get("avg_logprob", 0)) for s in segs
-                ):
-                    raise ValueError("nan in logprob")
-            except Exception as _fp16_err:
-                _is_nan_err = ("nan" in str(_fp16_err).lower() or
-                               "logits" in str(_fp16_err).lower() or
-                               "key.size" in str(_fp16_err).lower() or
-                               "nan in logprob" in str(_fp16_err))
-                if fp16 and _is_nan_err:
-                    self._log(t("log_fp16_retry"))
-                    try:
-                        result = _g.whisper_model.transcribe(audio, fp16=False, **common_args)
-                    except Exception as _fp32_err:
-                        if _is_nan_err or "nan" in str(_fp32_err).lower():
-                            # fp32でもNaN → モデルが破損、再ロードして回復
-                            self._log(t("log_fp32_reload"))
-                            _g.whisper_model = None
-                            _g.whisper_device = "cpu"
-                            self._load_model()
+                fp16 = (_g.whisper_device == "cuda")
+                # テキストエリアの内容を文脈ヒントとして渡す（同音異義語の精度向上）
+                initial_prompt = getattr(self, "_initial_prompt_cache", None)
+                self._log(t("log_voice_transcribe", fp16=fp16,
+                             prompt=t("log_yes") if initial_prompt else t("log_no")))
+                wlang = self.settings.get("whisper_language", "ja")
+                common_args = dict(
+                    language=None if wlang == "auto" else wlang,
+                    initial_prompt=initial_prompt,
+                )
+                try:
+                    result = _g.whisper_model.transcribe(audio, fp16=fp16, **common_args)
+                    # fp16でNaNが発生した場合はfp32でリトライ
+                    import math
+                    segs = result.get("segments", [])
+                    if fp16 and segs and any(
+                        math.isnan(s.get("avg_logprob", 0)) for s in segs
+                    ):
+                        raise ValueError("nan in logprob")
+                except Exception as _fp16_err:
+                    _is_nan_err = ("nan" in str(_fp16_err).lower() or
+                                   "logits" in str(_fp16_err).lower() or
+                                   "key.size" in str(_fp16_err).lower() or
+                                   "nan in logprob" in str(_fp16_err))
+                    if fp16 and _is_nan_err:
+                        self._log(t("log_fp16_retry"))
+                        try:
                             result = _g.whisper_model.transcribe(audio, fp16=False, **common_args)
-                        else:
-                            raise
-                else:
-                    raise
-            text = result["text"].strip()
+                        except Exception as _fp32_err:
+                            if _is_nan_err or "nan" in str(_fp32_err).lower():
+                                # fp32でもNaN → モデルが破損、再ロードして回復
+                                self._log(t("log_fp32_reload"))
+                                _g.whisper_model = None
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                                self._load_model()
+                                result = _g.whisper_model.transcribe(audio, fp16=False, **common_args)
+                            else:
+                                raise
+                    else:
+                        raise
+                text = result["text"].strip()
 
-            # 無音検出: セグメントの no_speech_prob が高い場合は破棄
-            segments = result.get("segments", [])
-            if segments:
-                avg_no_speech = sum(s.get("no_speech_prob", 0) for s in segments) / len(segments)
-                if avg_no_speech > 0.6:
-                    self._log(t("log_voice_silent_skip", prob=avg_no_speech))
+                # 無音検出: セグメントの no_speech_prob が高い場合は破棄
+                segments = result.get("segments", [])
+                if segments:
+                    avg_no_speech = sum(s.get("no_speech_prob", 0) for s in segments) / len(segments)
+                    if avg_no_speech > 0.6:
+                        self._log(t("log_voice_silent_skip", prob=avg_no_speech))
+                        self.root.after(0, lambda: self.voice_status.set(""))
+                        return
+
+                # ハルシネーション文字列フィルタ（無音時にWhisperが幻覚的に出力する既知フレーズ）
+                HALLUCINATIONS = {
+                    "ご視聴ありがとうございました",
+                    "字幕は自動生成されています",
+                    "チャンネル登録をお願いします",
+                    "ありがとうございました",
+                    "よろしくお願いします",
+                    "お疲れ様でした",
+                    "次回は、次回の動画でお会いしましょう。",
+                    "ご視聴ありがとうございました。",
+                }
+                if text in HALLUCINATIONS or (not text):
+                    self._log(t("log_voice_halluc", text=repr(text)))
                     self.root.after(0, lambda: self.voice_status.set(""))
                     return
 
-            # ハルシネーション文字列フィルタ（無音時にWhisperが幻覚的に出力する既知フレーズ）
-            HALLUCINATIONS = {
-                "ご視聴ありがとうございました",
-                "字幕は自動生成されています",
-                "チャンネル登録をお願いします",
-                "ありがとうございました",
-                "よろしくお願いします",
-                "お疲れ様でした",
-                "次回は、次回の動画でお会いしましょう。",
-                "ご視聴ありがとうございました。",
-            }
-            if text in HALLUCINATIONS or (not text):
-                self._log(t("log_voice_halluc", text=repr(text)))
-                self.root.after(0, lambda: self.voice_status.set(""))
-                return
-
-            short = text[:60] + ("…" if len(text) > 60 else "")
-            self._log(t("log_voice_result", text=short))
-            self.root.after(0, lambda: self._insert_voice_text(text))
-        except Exception as e:
-            self._log(t("log_voice_err", e=e))
-            self.root.after(0, lambda msg=str(e): self.voice_status.set(t("vstatus_err", e=msg)))
+                short = text[:60] + ("…" if len(text) > 60 else "")
+                self._log(t("log_voice_result", text=short))
+                self.root.after(0, lambda: self._insert_voice_text(text))
+            except Exception as e:
+                self._log(t("log_voice_err", e=e))
+                self.root.after(0, lambda msg=str(e): self.voice_status.set(t("vstatus_err", e=msg)))
+                # 転写例外はモデルの内部状態を壊す可能性があるため再ロードして回復
+                _g.whisper_model = None
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                self._load_model()
 
     def _insert_voice_text(self, text):
         if self.voice_mode == "edit":
@@ -1660,6 +1672,8 @@ class InputWindow:
             return
         mode = self.settings.get("model_mode", "gpu")
         if mode == "gpu":
+            return
+        if not torch.cuda.is_available():
             return
         # 既存のタイマーをキャンセル
         if _g.offload_timer is not None:
@@ -2221,22 +2235,27 @@ class InputWindow:
         separator()
 
         # ── モデル管理
+        cuda_available = torch.cuda.is_available()
         section(t("sec_model_mode"))
         mode_var = tk.StringVar(value=self.settings["model_mode"])
         modes = [
             ("gpu",    t("mode_gpu")),
             ("cpu",    t("mode_cpu")),
         ]
+        radio_btns = []
         for val, label in modes:
-            tk.Radiobutton(inner, text=label, variable=mode_var, value=val,
-                           font=("Yu Gothic", 9), anchor=tk.W
-                           ).pack(fill=tk.X, padx=36, pady=1)
+            rb = tk.Radiobutton(inner, text=label, variable=mode_var, value=val,
+                                font=("Yu Gothic", 9), anchor=tk.W,
+                                state=tk.NORMAL if cuda_available else tk.DISABLED)
+            rb.pack(fill=tk.X, padx=36, pady=1)
+            radio_btns.append(rb)
 
         # CPU待機のタイミング
         delay_frame = tk.Frame(inner)
         delay_frame.pack(fill=tk.X, padx=52, pady=(4, 0))
-        tk.Label(delay_frame, text=t("lbl_offload_time"),
-                 font=("Yu Gothic", 9)).pack(side=tk.LEFT)
+        delay_time_label = tk.Label(delay_frame, text=t("lbl_offload_time"),
+                                    font=("Yu Gothic", 9))
+        delay_time_label.pack(side=tk.LEFT)
         delay_var = tk.StringVar(value=str(self.settings["cpu_offload_delay"]))
         delay_choices = {"0": t("delay_0"), "1": t("delay_1"), "5": t("delay_5"), "10": t("delay_10")}
         delay_menu = tk.OptionMenu(delay_frame, delay_var, *delay_choices.keys())
@@ -2248,9 +2267,13 @@ class InputWindow:
 
         def update_delay_label(*_):
             delay_label.configure(text=delay_choices.get(delay_var.get(), ""))
-            # CPU待機モード以外はグレーアウト
-            state = tk.NORMAL if mode_var.get() == "cpu" else tk.DISABLED
+            # CUDAなし: delay関連は常時無効。あり: CPU待機モード以外はグレーアウト
+            if not cuda_available:
+                state = tk.DISABLED
+            else:
+                state = tk.NORMAL if mode_var.get() == "cpu" else tk.DISABLED
             delay_menu.configure(state=state)
+            delay_time_label.configure(state=state)
 
         mode_var.trace_add("write", update_delay_label)
         delay_var.trace_add("write", update_delay_label)
