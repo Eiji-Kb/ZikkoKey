@@ -4,8 +4,10 @@
 ZikkoKey is a lightweight desktop input pad designed to be used alongside AI coding agents like Claude Code.
 Voice input and voice-based editing are both supported. Edited text can be sent to any window.
 
-🤔 Ugh, I pressed Enter again when I meant to press Shift+Enter. Still happens sometimes.  
-On mainframe editors, the "↵" key is purely a line break — you only send to the host by pressing the Execute key (Enter). I wanted that same feel, so I built this input pad.  
+![IBM5576](ibm5576-001.jpg)
+
+🤔 Ugh, I meant to press Shift+"↵" but pressed "↵" alone in my haste. Still happens sometimes…  
+On mainframe editors, the "↵" key is purely a line break — you only send to the host by pressing the Execute key (now Right Ctrl). I wanted that same feel, so I created this input pad.  
 Lately I've been using voice input quite a bit too, so I wired in Whisper as well.  
 (This app is general-purpose, but since I mainly use Claude Code right now, it's tuned toward that.)
 
@@ -15,35 +17,25 @@ Lately I've been using voice input quite a bit too, so I wired in Whisper as wel
 
 ## Features
 
-- **Voice transcription** — Transcribes speech via OpenAI Whisper ※ Whisper setup is required. It is included in step 2: Python package installation (requirements.txt).
-- **Voice editing** — Edit text by voice (add a line break / proofread / make it a list / change X to Y / etc. — doesn't always work perfectly; use Ctrl+Z to undo)  
-  Selectable voice-editing AI — keeping costs as low as possible  
-  　Claude Code CLI / Uses the Claude CLI you're already running  
-  　Ollama (Qwen, etc.) / Local LLM (free) ※ Ollama must be installed separately  
-  　Google Gemini API / Free tier available ※ API key required  
-  　Depending on usage frequency, Google Gemini API is currently recommended — no Claude Code tokens consumed, and it's fast.  
-- **Screenshot capture** — Captures the selected window. The image is saved as `shot.png` in the same folder as `zikkokey.py`. Specifying the absolute path to Claude is most reliable (e.g. `c:\zikkokey\shot.png`), but you can also add the following to Claude's `CLAUDE.md`:
-    #### When zikkokey and Claude are in the same folder
-    \## Screenshot  
-`shot.png` in this directory is the screenshot saved by the 📸 button in the app.  
-When the user mentions the screenshot or asks you to look at it, read this file.  
-
-  #### When zikkokey and Claude are in different folders, specify the file path (e.g. `C:\zikkotest\shot.png`)
-
-  \## Screenshot  
-  The screenshot taken by the user is saved at C:\zikkotest\shot.png  
-  When the user mentions the screenshot or asks you to look at it, read this file.  
-
+- **Enter ≠ Return** — Feels like a host terminal editor. "↵" is purely a line break; the Execute key (now Right Ctrl) sends to the target.
+  ※ Apparently the proper technique is to press the Execute key with the heel of the right hand near the base of the pinky. But press it however you like 😉
+- **Voice transcription** — Transcribes speech via OpenAI Whisper ※ Whisper setup is required. It is included in the Python package installation (requirements.txt).
+- **Voice editing** — Edit text by voice (add a line break / proofread / make it a list / change X to Y / etc. — doesn't always work perfectly; use Ctrl+Z to undo). Choose from three AI backends: Claude Code CLI, Ollama, or Google Gemini API (see [Optional Settings](#settings) for details).
+- **Screenshot capture** — Captures the selected window and saves it as `shot.png` in the same folder as `zikkokey.py`. For how to configure Claude to use this image, see [Optional Settings](#claudemd-configuration-screenshot-capture).
+- **Claude.ai usage gauge** — Displays Claude Code usage at the bottom ※ Requires `rate_limit_bridge.py` to be set up (see [Optional Settings](#claude-code-usage-gauge))
 - **Mute during voice input** — Temporarily mutes or lowers system audio while recording, useful when background music is playing
 - **Playback of recorded audio** — Automatically plays back your recording after speaking. Handy for checking your own articulation.
-- **Claude.ai usage gauge** — Displays Claude Code usage at the bottom ※ Requires `rate_limit_bridge.py` to be installed (see below)
-- **New window** — Opens additional input pads. Uses less memory than running multiple instances simultaneously. (When sending to a web browser like Chrome, enabling ☑ Auto-send is recommended — text is sent without pressing the Execute key. Note: voice editing will be unavailable in this mode.)
+- **New window** — Opens additional input pads. Uses less memory than running multiple instances simultaneously. (When sending to a browser like Chrome, enabling ☑ Auto-send is recommended — text is sent without pressing the Execute key. Note: voice editing will be unavailable in this mode.)
 - **Lightweight** — The main script `zikkokey.py` is under 200 KB. If you don't need the shutter sound, this single file is all you need. Easy to copy into any project folder and use from there.
+
+---
 
 ## System Requirements
 
 - Windows (GPU recommended. The Whisper voice input component can run on CPU only, but may be very slow depending on your hardware.)
   macOS should mostly work for the core features, but some parts like audio playback need Mac-specific adjustments. Since I don't currently have a Mac available, it hasn't been tested. Linux requires more changes than macOS, particularly around screen capture.
+
+---
 
 ## Installation
 
@@ -60,7 +52,29 @@ cd ZikkoKey
 pip install -r requirements.txt
 ```
 
-### 3. Claude Code usage gauge (optional)
+---
+
+## Launching
+
+**From the command line:**
+```bash
+python zikkokey.py
+```
+Launching from the command line is recommended. Make sure to trust the launch directory in Claude Code.
+
+**Windows — double-click to launch:**
+```
+zikkokey.vbs        # Launches without a console window (recommended)
+zikkokey.bat        # Launches with a console window
+```
+
+The default UI language is English. To switch to Japanese, change it in the settings.
+
+---
+
+## Optional Settings
+
+### Claude Code Usage Gauge
 
 Setting up `rate_limit_bridge.py` enables the 5h / 7d rate limit bars in ZikkoKey.
 Claude Code automatically calls this script and writes usage data to a cache file.
@@ -78,7 +92,45 @@ Claude Code automatically calls this script and writes usage data to a cache fil
 }
 ```
 
-### 4. Ollama (optional)
+If your existing `settings.json` already has other settings, merge them as shown below. A JSON file can only have one root object.
+
+<pre>
+{
+  "autoUpdatesChannel": "latest",
+  "statusLine": {
+    "type": "command",
+    "command": "python \"$HOME/.zikkokey/rate_limit_bridge.py\""
+  }
+}
+</pre>
+
+If you're not confident editing JSON manually, explaining what needs to be added and asking Claude Code to do it may be faster and more reliable.
+
+### CLAUDE.md Configuration (Screenshot Capture)
+
+Specifying the absolute path (e.g. `c:\zikkokey\shot.png`) to Claude is most reliable, but you can also add the following to `CLAUDE.md` so Claude understands when you say "look at the screenshot":
+
+#### When zikkokey and Claude are in the same folder
+
+```
+## Screenshot
+`shot.png` in this directory is the screenshot saved by the 📸 button in the app.
+When the user mentions the screenshot or asks you to look at it, read this file.
+```
+
+#### When zikkokey and Claude are in different folders (specify the file path)
+
+```
+## Screenshot
+The screenshot taken by the user is saved at C:\zikkotest\shot.png
+When the user mentions the screenshot or asks you to look at it, read this file.
+```
+
+### Settings
+
+![English](set-e.png)
+
+### Ollama
 
 Required if you want to use a local LLM for voice editing.
 
@@ -106,23 +158,11 @@ Required if you want to use a local LLM for voice editing.
 
    Note: In ZikkoKey's settings, select Ollama as the voice-editing backend and enter the downloaded model name.
 
+### Google Gemini API
+
+Obtain an API key from [Google AI Studio](https://aistudio.google.com). If you are already logged in, you can get one via "Get API key" at the bottom of the left menu. The project name can be anything. Enter the API key and model name (e.g., gemini-2.5-flash-lite) in ZikkoKey's settings.
+
 ---
-
-## Launching
-
-**From the command line:**
-```bash
-python zikkokey.py
-```
-Launching from the command line is recommended. Make sure to trust the launch directory in Claude Code.
-
-**Windows — double-click to launch:**
-```
-zikkokey.vbs        # Launches without a console window (recommended)
-zikkokey.bat        # Launches with a console window
-```
-
-The default UI language is English. To switch to Japanese, change it in the settings.
 
 ## How to Use
 
@@ -183,10 +223,6 @@ Notes:
 - Ctrl + Z / Ctrl + Y use a custom implementation that overrides Tkinter's default undo/redo — behavior differs due to integration with send history
 
 ---
-
-### Settings
-
-![English](set-e.png)
 
 ## Acknowledgements
 
