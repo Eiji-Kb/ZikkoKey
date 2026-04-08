@@ -181,7 +181,6 @@ Tkinter Text widget standard
 
 Notes:
 - Ctrl + Z / Ctrl + Y use a custom implementation that overrides Tkinter's default undo/redo — behavior differs due to integration with send history
-- Ctrl + A normally moves to line start in Tkinter, but on Windows it typically acts as Select All
 
 ---
 

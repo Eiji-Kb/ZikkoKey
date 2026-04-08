@@ -198,7 +198,6 @@ Tkinter Text ウィジェット標準
 
 注意点：
 - Ctrl + Z / Ctrl + Y は独自実装で上書きされているため、Tkinter標準の undo/redo とは挙動が異なります（送信履歴との連携あり）
-- Ctrl + A は標準では「行頭移動」ですが、Windowsの Tkinter では全選択として動作することが多いです
 
 
 ---
