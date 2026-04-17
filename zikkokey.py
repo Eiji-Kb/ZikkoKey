@@ -160,6 +160,7 @@ LANG: dict[str, dict[str, str]] = {
         "btn_play":          "▷",
         "btn_play_stop":     "■",
         "chk_autoplay":      "自動再生",
+        "chk_newline_replace": "改行を空白に置換",
         "chk_autosend":      "自動送信",
         "vstatus_playing":   "再生中…",
         # ログ・送信ボタン
@@ -374,6 +375,7 @@ LANG: dict[str, dict[str, str]] = {
         "btn_play":          "▷",
         "btn_play_stop":     "■",
         "chk_autoplay":      "Auto-play",
+        "chk_newline_replace": "Replace ↵ with spaces",
         "chk_autosend":      "Auto-send",
         "vstatus_playing":   "Playing…",
         # Log / send
@@ -674,7 +676,8 @@ class InputWindow:
         self.SAMPLE_RATE    = 16000
         self.WHISPER_MODEL  = "turbo"
         self.auto_play_var  = tk.BooleanVar(value=False)
-        self.auto_send_var  = tk.BooleanVar(value=self.settings.get("auto_send", False))
+        self.auto_send_var       = tk.BooleanVar(value=self.settings.get("auto_send", False))
+        self.newline_replace_var = tk.BooleanVar(value=self.settings.get("newline_replace", False))
 
         if root is None:
             # 初回ウィンドウ：スプラッシュを Toplevel に置き換え
@@ -908,6 +911,18 @@ class InputWindow:
         tk.Checkbutton(abar, textvariable=sv("chk_autosend"),
                        variable=self.auto_send_var,
                        command=_on_autosend_toggle,
+                       bg=BG2, fg="#aaaacc", selectcolor=BG2,
+                       activebackground=BG2, activeforeground="#ccccee",
+                       font=("Yu Gothic", 9), cursor="hand2"
+                       ).pack(side=tk.RIGHT, padx=(0, 2))
+
+        def _on_newline_replace_toggle():
+            self.settings["newline_replace"] = self.newline_replace_var.get()
+            save_settings(self.settings)
+
+        tk.Checkbutton(abar, textvariable=sv("chk_newline_replace"),
+                       variable=self.newline_replace_var,
+                       command=_on_newline_replace_toggle,
                        bg=BG2, fg="#aaaacc", selectcolor=BG2,
                        activebackground=BG2, activeforeground="#ccccee",
                        font=("Yu Gothic", 9), cursor="hand2"
@@ -2756,7 +2771,11 @@ class InputWindow:
 
     # ── 送信 ─────────────────────────────────────────────────
     def send(self):
-        text = self.text.get("1.0", tk.END).rstrip("\n")
+        original_text = self.text.get("1.0", tk.END).rstrip("\n")
+        if self.newline_replace_var.get():
+            text = original_text.replace("\n", "   ")
+        else:
+            text = original_text
 
         if not self.target_hwnd:
             messagebox.showwarning(t("dlg_no_target_t"), t("dlg_no_target"))
@@ -2803,9 +2822,9 @@ class InputWindow:
             self.root.after(2000, lambda: self.status.set(t("status_ready")))
             return
 
-        # 送信履歴に保存（空送信は除く）
+        # 送信履歴に保存（空送信は除く・置換前の元テキストを保存）
         if not empty:
-            self.sent_history.insert(0, text)
+            self.sent_history.insert(0, original_text)
             if len(self.sent_history) > self.HISTORY_MAX:
                 self.sent_history.pop()
 
