@@ -340,6 +340,11 @@ LANG: dict[str, dict[str, str]] = {
         "html_detected":         "HTMLが検出されました",
         "html_ask":              "出力がHTMLです。ブラウザでプレビューしますか？\n\n「はい」→ブラウザで開く\n「いいえ」→テキストエリアに挿入",
         "log_html_preview":      "[HTML] ブラウザでプレビュー: {path}",
+        "log_lineop_parse":   "[LINE-OP] 行操作を解析中…",
+        "log_lineop_fallback":"[LINE-OP] 行操作ではないためテキスト編集へ",
+        "log_lineop_done":    "[LINE-OP] 完了: {n}行 → {m}行",
+        "log_lineop_err":     "[LINE-OP] エラー: {e}",
+        "vstatus_lineop":     "行操作を解析中…",
     },
     "en": {
         # Header
@@ -555,6 +560,11 @@ LANG: dict[str, dict[str, str]] = {
         "html_detected":         "HTML detected",
         "html_ask":              "The output looks like HTML. Open in browser?\n\n'Yes' → open in browser\n'No' → insert into text area",
         "log_html_preview":      "[HTML] Browser preview: {path}",
+        "log_lineop_parse":   "[LINE-OP] Parsing line ops…",
+        "log_lineop_fallback":"[LINE-OP] Not a line op, falling back to text edit",
+        "log_lineop_done":    "[LINE-OP] Done: {n} lines → {m} lines",
+        "log_lineop_err":     "[LINE-OP] Error: {e}",
+        "vstatus_lineop":     "Parsing line ops…",
     },
 }
 
@@ -941,9 +951,26 @@ class InputWindow:
         pane.pack(expand=True, fill=tk.BOTH, padx=8, pady=6)
 
         wrap = WRAP_MAP.get(self.settings["wrap_mode"], tk.CHAR)
+
+        # テキストエリアを Frame で包んで行番号 Canvas を左に追加
+        text_frame = tk.Frame(pane, bg=self.settings.get("editor_bg", "#0d0d1a"))
+        pane.add(text_frame, minsize=120)
+
+        LINENUM_BG = "#0a0a18"
+        LINENUM_FG = "#556677"
+        fsize = self.settings["font_size"]
+        self._line_num_canvas = tk.Canvas(
+            text_frame, bg=LINENUM_BG, highlightthickness=0,
+            width=fsize * 3,   # フォントサイズに比例した幅
+        )
+        self._line_num_canvas.pack(side=tk.LEFT, fill=tk.Y)
+
+        # 行番号とテキストエリアの境界線
+        tk.Frame(text_frame, width=1, bg="#222240").pack(side=tk.LEFT, fill=tk.Y)
+
         self.text = scrolledtext.ScrolledText(
-            pane, wrap=wrap,
-            font=("Yu Gothic", self.settings["font_size"]),
+            text_frame, wrap=wrap,
+            font=("Yu Gothic", fsize),
             bg=self.settings.get("editor_bg", "#0d0d1a"),
             fg=self.settings.get("editor_fg", "#c8c8e0"),
             insertbackground=self.settings.get("editor_cursor", "#8888ff"),
@@ -951,8 +978,24 @@ class InputWindow:
             relief=tk.FLAT, bd=0,
             undo=True, maxundo=200,
         )
-        pane.add(self.text, minsize=120)
+        self.text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # スクロール時に行番号も更新
+        def _on_text_scroll(first, last):
+            self.text.vbar.set(first, last)
+            self._redraw_line_numbers()
+        self.text.config(yscrollcommand=_on_text_scroll)
+
         self.text.focus_set()
+
+        # テキスト変更・設定変更時に行番号を再描画
+        self.text.bind("<<Modified>>", lambda e: (
+            self.text.edit_modified(False),
+            self.root.after(10, self._redraw_line_numbers)
+        ))
+        self.text.bind("<Configure>", lambda e: self.root.after(10, self._redraw_line_numbers))
+        self.text.bind("<KeyRelease>", lambda e: self.root.after(0, self._redraw_line_numbers))
+        self.text.bind("<ButtonRelease>", lambda e: self.root.after(0, self._redraw_line_numbers))
 
         # ログエリア
         log_frame = tk.Frame(pane, bg="#0a0a18")
@@ -1413,9 +1456,14 @@ class InputWindow:
                 sel_start = None
                 sel_end   = None
                 base_text = full_text
-            threading.Thread(target=self._run_edit,
-                             args=(text, base_text, sel_start, sel_end, full_text),
-                             daemon=True).start()
+            if sel_start is None and self._looks_like_line_op(text):
+                # 行番号ベースの操作 → 専用ルート
+                threading.Thread(target=self._run_line_ops,
+                                 args=(text, full_text), daemon=True).start()
+            else:
+                threading.Thread(target=self._run_edit,
+                                 args=(text, base_text, sel_start, sel_end, full_text),
+                                 daemon=True).start()
         else:
             if text:
                 try:
@@ -1641,6 +1689,231 @@ class InputWindow:
     def _looks_like_html(text: str) -> bool:
         s = text.lstrip()
         return s.startswith(("<!DOCTYPE", "<!doctype", "<html", "<HTML"))
+
+    # ── 行番号 ───────────────────────────────────────────────
+    def _redraw_line_numbers(self):
+        canvas = self._line_num_canvas
+        canvas.delete("all")
+        fsize = self.settings["font_size"]
+        i = self.text.index("@0,0")
+        while True:
+            dline = self.text.dlineinfo(i)
+            if dline is None:
+                break
+            y = dline[1]
+            linenum = str(i).split(".")[0]
+            canvas.create_text(
+                canvas.winfo_width() - 4, y + dline[3] // 2,
+                anchor="e", text=linenum,
+                fill="#556677",
+                font=("Yu Gothic", max(8, fsize - 2)),
+            )
+            next_i = self.text.index(f"{i}+1line")
+            if self.text.compare(next_i, "==", i):
+                break
+            i = next_i
+
+    # ── 行操作（音声指示）────────────────────────────────────
+    @staticmethod
+    def _looks_like_line_op(instruction):
+        import re
+        return bool(re.search(r'\d+\s*行', instruction))
+
+    def _call_backend_raw(self, prompt):
+        """生のプロンプトを設定されたバックエンドへ送り応答を返す。"""
+        import json as _json
+        backend = self.settings.get("edit_backend", "claude_cli")
+        if backend == "claude_cli":
+            claude_exe = self._find_claude_exe()
+            if not claude_exe:
+                raise RuntimeError(t("err_no_claude"))
+            node_exe, cli_js = self._find_node_cli(claude_exe)
+            if node_exe is None:
+                raise RuntimeError(t("err_no_claude"))
+            r = subprocess.run(
+                [node_exe, cli_js, "--dangerously-skip-permissions", "--print", prompt],
+                capture_output=True, timeout=60,
+            )
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.decode("utf-8", errors="replace").strip())
+            return r.stdout.decode("utf-8", errors="replace").strip()
+        elif backend == "ollama":
+            import urllib.request, urllib.error
+            host  = self.settings.get("ollama_host", "http://localhost:11434")
+            model = self.settings.get("ollama_model", "qwen3:8b")
+            body  = _json.dumps({"model": model, "prompt": prompt, "stream": False}).encode()
+            req   = urllib.request.Request(
+                f"{host}/api/generate",
+                data=body, headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=60) as res:
+                data = _json.loads(res.read())
+            return data.get("response", "").strip()
+        elif backend == "gemini":
+            try:
+                from google import genai
+            except ImportError:
+                raise RuntimeError(t("err_no_gemini_pkg"))
+            key = self.settings.get("gemini_api_key", "")
+            if not key:
+                raise RuntimeError(t("err_no_api_key"))
+            model  = self.settings.get("gemini_model", "gemini-2.0-flash")
+            client = genai.Client(api_key=key)
+            resp   = client.models.generate_content(model=model, contents=prompt)
+            return resp.text.strip()
+        return ""
+
+    def _parse_line_ops(self, instruction, line_count):
+        """LLMに行操作JSONを解析させる。行操作でなければNoneを返す。"""
+        import re, json as _json
+        parse_prompt = (
+            "テキスト操作コマンドをJSONで返してください。\n"
+            f"テキストは全部で {line_count} 行あります。行番号は1始まりです。\n\n"
+            "ユーザーの指示が行番号ベースの操作であれば：\n"
+            '{"type":"line_ops","ops":[...]}\n\n'
+            "対応操作：\n"
+            '  {"action":"delete","from":開始行,"to":終了行}\n'
+            '  {"action":"copy","from":開始行,"to":終了行,"to_line":挿入先行番号}\n'
+            '  {"action":"move","from":開始行,"to":終了行,"to_line":挿入先行番号}\n'
+            '  {"action":"swap","line_a":行A,"line_b":行B}\n\n'
+            "コピー・移動の「to_line」は挿入先の行番号（元の行番号基準）。\n"
+            "行番号ベースでない指示なら：\n"
+            '{"type":"text_edit"}\n\n'
+            "JSONのみ返してください。コードブロック・説明不要。\n\n"
+            f"指示: {instruction}"
+        )
+        self._log(t("log_lineop_parse"))
+        try:
+            raw = self._call_backend_raw(parse_prompt)
+        except Exception as e:
+            self._log(t("log_lineop_err", e=e))
+            return None
+        # コードブロックを除去
+        raw = re.sub(r"```[a-z]*", "", raw).strip().rstrip("`").strip()
+        # JSON部分を抽出
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not m:
+            return None
+        try:
+            data = _json.loads(m.group())
+        except _json.JSONDecodeError:
+            return None
+        if data.get("type") == "text_edit":
+            return None
+        if data.get("type") == "line_ops":
+            return data.get("ops", [])
+        return None
+
+    @staticmethod
+    def _exec_line_ops(ops, original_text):
+        """行操作を元テキストに適用し、結果テキストを返す。
+        全参照はオリジナル行番号基準。削除・挿入はオリジナル行番号でプランを作り
+        先に全ソースを取得してから下から上へ適用する。
+        """
+        lines = original_text.split('\n')
+        n = len(lines)
+
+        # swap は先にインプレース処理（他の ops と干渉しない前提）
+        for op in ops:
+            if op.get("action") == "swap":
+                a = op["line_a"] - 1
+                b = op["line_b"] - 1
+                if 0 <= a < n and 0 <= b < n:
+                    lines[a], lines[b] = lines[b], lines[a]
+
+        # ソースコンテンツをオリジナル行番号で事前取得
+        sources = {}
+        for i, op in enumerate(ops):
+            if op.get("action") in ("copy", "move"):
+                f = max(0, op["from"] - 1)
+                t_end = min(n, op["to"])  # inclusive → exclusive
+                sources[i] = list(lines[f:t_end])
+
+        # 削除セットと挿入マップを構築（オリジナル行番号基準）
+        deleted   = set()
+        insertions = {}   # orig_line_idx → [lines to insert before that line]
+
+        for i, op in enumerate(ops):
+            action = op.get("action")
+            if action == "delete":
+                for li in range(op["from"] - 1, op["to"]):  # to は含む
+                    deleted.add(li)
+            elif action == "copy":
+                tgt = op["to_line"] - 1
+                insertions.setdefault(tgt, []).extend(sources[i])
+            elif action == "move":
+                for li in range(op["from"] - 1, op["to"]):
+                    deleted.add(li)
+                tgt = op["to_line"] - 1
+                insertions.setdefault(tgt, []).extend(sources[i])
+            # swap は上で処理済み
+
+        # 最終リストを構築
+        result = []
+        for i in range(n):
+            if i in insertions:
+                result.extend(insertions[i])
+            if i not in deleted:
+                result.append(lines[i])
+        if n in insertions:
+            result.extend(insertions[n])
+
+        return '\n'.join(result)
+
+    def _run_line_ops(self, instruction, full_text):
+        """行操作ワーカースレッド。解析→実行→UI更新。"""
+        # 編集前テキストを履歴へ保存
+        self.sent_history.insert(0, full_text)
+        if len(self.sent_history) > self.HISTORY_MAX:
+            self.sent_history.pop()
+
+        line_count = len(full_text.split('\n'))
+        ops = self._parse_line_ops(instruction, line_count)
+
+        if ops is None:
+            # テキスト編集にフォールバック
+            self._log(t("log_lineop_fallback"))
+            backend = self.settings.get("edit_backend", "claude_cli")
+            try:
+                if backend == "claude_cli":
+                    result = self._edit_via_claude_cli(full_text, instruction)
+                elif backend == "ollama":
+                    result = self._edit_via_ollama(full_text, instruction)
+                elif backend == "gemini":
+                    result = self._edit_via_gemini(full_text, instruction)
+                else:
+                    result = None
+                if result:
+                    self.root.after(0, lambda: self._apply_edit_result(result))
+                else:
+                    self.root.after(0, lambda: self.voice_status.set(t("vstatus_edit_fail")))
+            except Exception as e:
+                full_msg = str(e)
+                short_msg = full_msg.splitlines()[0][:80]
+                self._log(t("log_edit_err", e=full_msg))
+                self.root.after(0, lambda msg=short_msg: self.voice_status.set(t("vstatus_edit_err", msg=msg)))
+            return
+
+        try:
+            result_text = self._exec_line_ops(ops, full_text)
+            n_before = line_count
+            n_after  = len(result_text.split('\n'))
+            self._log(t("log_lineop_done", n=n_before, m=n_after))
+            self.root.after(0, lambda: self._apply_line_op_result(result_text))
+        except Exception as e:
+            self._log(t("log_lineop_err", e=e))
+            short_msg = str(e).splitlines()[0][:80]
+            self.root.after(0, lambda msg=short_msg: self.voice_status.set(t("vstatus_edit_err", msg=msg)))
+
+    def _apply_line_op_result(self, result_text):
+        self._redo_stack.clear()
+        self.text.delete("1.0", tk.END)
+        self.text.insert(tk.END, result_text)
+        self.text.edit_reset()
+        self.voice_status.set(t("vstatus_edit_done"))
+        self.root.after(2000, lambda: self.voice_status.set(""))
+        self.root.after(10, self._redraw_line_numbers)
+        self.text.focus_set()
 
     def _preview_html(self, html: str):
         import webbrowser, tempfile, pathlib
