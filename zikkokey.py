@@ -1403,10 +1403,19 @@ class InputWindow:
         if self.voice_mode == "edit":
             self.voice_mode = "input"
             self.voice_status.set(t("vstatus_editing"))
-            # base_text をメインスレッドで安全に取得してからスレッドへ渡す
-            base_text = self.text.get("1.0", tk.END).strip()
+            # 選択範囲の有無をメインスレッドで確認してからスレッドへ渡す
+            full_text = self.text.get("1.0", tk.END).strip()
+            try:
+                sel_start = self.text.index(tk.SEL_FIRST)
+                sel_end   = self.text.index(tk.SEL_LAST)
+                base_text = self.text.get(tk.SEL_FIRST, tk.SEL_LAST)
+            except tk.TclError:
+                sel_start = None
+                sel_end   = None
+                base_text = full_text
             threading.Thread(target=self._run_edit,
-                             args=(text, base_text), daemon=True).start()
+                             args=(text, base_text, sel_start, sel_end, full_text),
+                             daemon=True).start()
         else:
             if text:
                 try:
@@ -1425,15 +1434,16 @@ class InputWindow:
         self._schedule_offload()
 
     # ── 音声編集（指示モード） ───────────────────────────────
-    def _run_edit(self, instruction, base_text=""):
+    def _run_edit(self, instruction, base_text="", sel_start=None, sel_end=None, full_text=None):
         if not base_text:
             self.root.after(0, lambda: messagebox.showwarning(
                 t("dlg_no_base_t"), t("dlg_no_base")))
             self.root.after(0, lambda: self.voice_status.set(""))
             return
 
-        # 編集前テキストを履歴に保存 → Ctrl+Z で編集前に戻れる
-        self.sent_history.insert(0, base_text)
+        # 編集前テキスト（フル）を履歴に保存 → Ctrl+Z で編集前に戻れる
+        history_text = full_text if full_text is not None else base_text
+        self.sent_history.insert(0, history_text)
         if len(self.sent_history) > self.HISTORY_MAX:
             self.sent_history.pop()
 
@@ -1442,18 +1452,18 @@ class InputWindow:
 
         try:
             if backend == "claude_cli":
-                result = self._edit_via_claude_cli(base_text, instruction)
+                result = self._edit_via_claude_cli(base_text, instruction, full_text)
             elif backend == "ollama":
-                result = self._edit_via_ollama(base_text, instruction)
+                result = self._edit_via_ollama(base_text, instruction, full_text)
             elif backend == "gemini":
-                result = self._edit_via_gemini(base_text, instruction)
+                result = self._edit_via_gemini(base_text, instruction, full_text)
             else:
                 result = None
 
             if result:
                 short = result[:60] + ("…" if len(result) > 60 else "")
                 self._log(t("log_edit_done", text=short))
-                self.root.after(0, lambda: self._apply_edit_result(result))
+                self.root.after(0, lambda: self._apply_edit_result(result, sel_start, sel_end))
             else:
                 self.root.after(0, lambda: self.voice_status.set(t("vstatus_edit_fail")))
         except Exception as e:
@@ -1462,7 +1472,16 @@ class InputWindow:
             short_msg = full_msg.splitlines()[0][:80]  # 先頭1行・80文字でステータス表示
             self.root.after(0, lambda msg=short_msg: self.voice_status.set(t("vstatus_edit_err", msg=msg)))
 
-    def _build_prompt(self, base_text, instruction):
+    def _build_prompt(self, base_text, instruction, full_text=None):
+        if full_text is not None and full_text != base_text:
+            # 選択範囲モード：全体の文脈を示しつつ、選択部分の置換結果のみ返させる
+            return (
+                "以下のテキストの中から、選択された部分のみを指示に従って修正してください。\n"
+                "修正後の選択部分のテキストのみを返し、説明・前置き・全体のテキストは不要です。\n\n"
+                f"【全体のテキスト（参考）】\n{full_text}\n\n"
+                f"【選択された部分（修正対象）】\n{base_text}\n\n"
+                f"【指示】\n{instruction}"
+            )
         return (
             "以下の元テキストに対して、指示に従って修正してください。\n"
             "修正後のテキストのみを返し、説明や前置きは不要です。\n\n"
@@ -1508,8 +1527,8 @@ class InputWindow:
             node_exe = shutil.which("node") or "node"
         return node_exe, cli_js
 
-    def _edit_via_claude_cli(self, base_text, instruction):
-        prompt = self._build_prompt(base_text, instruction)
+    def _edit_via_claude_cli(self, base_text, instruction, full_text=None):
+        prompt = self._build_prompt(base_text, instruction, full_text)
         claude_exe = self._find_claude_exe()
         if not claude_exe:
             raise RuntimeError(t("err_no_claude"))
@@ -1535,9 +1554,9 @@ class InputWindow:
             self._log(t("log_edit_empty", detail=detail))
         return out
 
-    def _edit_via_ollama(self, base_text, instruction):
+    def _edit_via_ollama(self, base_text, instruction, full_text=None):
         import urllib.request, urllib.error, json as _json
-        prompt = self._build_prompt(base_text, instruction)
+        prompt = self._build_prompt(base_text, instruction, full_text)
         host  = self.settings.get("ollama_host", "http://localhost:11434")
         model = self.settings.get("ollama_model", "qwen3:8b")
 
@@ -1571,7 +1590,7 @@ class InputWindow:
             raise RuntimeError(t("err_ollama_other", msg=f"HTTP {e.code}: {e.reason}"))
         return data.get("response", "").strip()
 
-    def _edit_via_gemini(self, base_text, instruction):
+    def _edit_via_gemini(self, base_text, instruction, full_text=None):
         try:
             from google import genai
         except ImportError:
@@ -1583,7 +1602,7 @@ class InputWindow:
         self._log(t("log_edit_gemini", model=model))
         client = genai.Client(api_key=key)
         response = client.models.generate_content(model=model,
-                                                  contents=self._build_prompt(base_text, instruction))
+                                                  contents=self._build_prompt(base_text, instruction, full_text))
         try:
             result = response.text.strip()
         except Exception as e:
@@ -1592,7 +1611,7 @@ class InputWindow:
             raise RuntimeError("Gemini returned empty response")
         return result
 
-    def _apply_edit_result(self, corrected):
+    def _apply_edit_result(self, corrected, sel_start=None, sel_end=None):
         # HTML検出：先頭がHTMLタグっぽければブラウザプレビューを提案
         if self._looks_like_html(corrected):
             open_browser = messagebox.askyesno(
@@ -1603,8 +1622,14 @@ class InputWindow:
                 self.root.after(2000, lambda: self.voice_status.set(""))
                 return
         self._redo_stack.clear()            # 新たな編集で既存のredo履歴をクリア
-        self.text.delete("1.0", tk.END)
-        self.text.insert(tk.END, corrected)
+        if sel_start is not None:
+            # 選択範囲のみ置換
+            self.text.delete(sel_start, sel_end)
+            self.text.insert(sel_start, corrected)
+        else:
+            # 全体置換（従来動作）
+            self.text.delete("1.0", tk.END)
+            self.text.insert(tk.END, corrected)
         self.text.edit_reset()              # ネイティブundoをリセット → Ctrl-Z で確実に履歴ベースundoへ
         self.voice_status.set(t("vstatus_edit_done"))
         self.root.after(2000, lambda: self.voice_status.set(""))
